@@ -62,13 +62,14 @@ static char dmenumon[2] = "0";
 static const char *dmenucmd[]		= { "dmenu_run", "-m", dmenumon, "-fn", dmenufont, "-nb", 
 										col_gray1, "-nf", col_gray3, "-sb", col_cyan, "-sf", col_gray4, NULL };
 static const char *termcmd[]		= { "st", NULL };
-static const char *firefox[]		= { "firefox", NULL };
-static const char *chrome[]			= {"chromium", "--password-store=basic", NULL };
+static const char *browser[]		= { "brave-browser", NULL };
 static const char *filemanager[]	= { "st", "-e", "cffm", NULL };
-static const char *crypto[]			= { "exodus", NULL };
-static const char *screenshot[]		= { "scrn", NULL };
+static const char *crypto[]			= { "electrum", NULL };
+static const char *screenshot[]		= { "gnome-screenshot", NULL };
+/*
 static const char *langEN[]			= { "setxkbmap", "us", NULL };
 static const char *langRS[]			= { "setxkbmap", "rs", NULL };
+*/
 static const char *upvol[]			= { "amixer", "-q", "set", "Master", "10%+", "unmute", NULL };
 static const char *downvol[]		= { "amixer", "-q", "set", "Master", "10%-", "unmute", NULL };
 static const char *mutevol[]		= { "amixer", "-q", "set", "Bass Speaker", "toggle", NULL };
@@ -77,13 +78,15 @@ static Key keys[] = {
 	/* modifier                 key			function			argument */
 	{ MODKEY,					XK_d,      	spawn,			{.v = dmenucmd } },
 	{ MODKEY,					XK_Return, 	spawn,			{.v = termcmd } },
-	{ MODKEY,					XK_f,	   	spawn,			{.v = firefox } },
-	{ MODKEY,					XK_c,	   	spawn,		    {.v = chrome } },
+	{ MODKEY,					XK_f,	   	spawn,			{.v = browser } },
+	{ MODKEY,					XK_c,	   	spawn,		    {.v = browser } },
 	{ MODKEY,					XK_r,	   	spawn,			{.v = filemanager } },
 	{ MODKEY,					XK_x,	   	spawn,			{.v = crypto } },
 	{ MODKEY,					XK_p,	   	spawn,			{.v = screenshot } },
+	/*
 	{ MODKEY|ShiftMask,			XK_space,  	spawn,		    {.v = langEN } },
 	{ MODKEY|ShiftMask,	        XK_z,	   	spawn,		    {.v = langRS } },
+	*/
 	{ MODKEY,                   XK_t,      	togglebar,		{0} },
 	{ MODKEY,                   XK_j,      	focusstack,     {.i = +1 } },
 	{ MODKEY,                   XK_k,      	focusstack,     {.i = -1 } },
