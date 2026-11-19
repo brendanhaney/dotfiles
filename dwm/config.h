@@ -87,6 +87,7 @@ static Key keys[] = {
 	{ MODKEY|ShiftMask,			XK_space,  	spawn,		    {.v = langEN } },
 	{ MODKEY|ShiftMask,	        XK_z,	   	spawn,		    {.v = langRS } },
 	*/
+	{ MODKEY|ShiftMask,         XK_l,      	fix_display,    {0} },
 	{ MODKEY,                   XK_t,      	togglebar,		{0} },
 	{ MODKEY,                   XK_j,      	focusstack,     {.i = +1 } },
 	{ MODKEY,                   XK_k,      	focusstack,     {.i = -1 } },

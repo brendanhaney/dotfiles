@@ -36,6 +36,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xproto.h>
 #include <X11/Xutil.h>
+#include <X11/extensions/Xrandr.h>
 #ifdef XINERAMA
 #include <X11/extensions/Xinerama.h>
 #endif /* XINERAMA */
@@ -188,6 +189,7 @@ static Client *nexttiled(Client *c);
 static void pop(Client *);
 static void propertynotify(XEvent *e);
 static void quit(const Arg *arg);
+static void randrnotify(XEvent *e);
 static Monitor *recttomon(int x, int y, int w, int h);
 static void resize(Client *c, int x, int y, int w, int h, int interact);
 static void resizeclient(Client *c, int x, int y, int w, int h);
@@ -237,11 +239,15 @@ static int xerrordummy(Display *dpy, XErrorEvent *ee);
 static int xerrorstart(Display *dpy, XErrorEvent *ee);
 static void zoom(const Arg *arg);
 
+// Reload resolution to whatever display is attached
+static void fix_display(const Arg *arg);
+
 /* variables */
 static const char broken[] = "broken";
 static char stext[256];
 static int screen;
 static int sw, sh;           /* X display screen geometry width, height */
+static int randravailable, randreventbase, randrerrorbase;
 static int bh, blw = 0;      /* bar geometry */
 static int lrpad;            /* sum of left and right padding for text */
 static int (*xerrorxlib)(Display *, XErrorEvent *);
@@ -560,6 +566,9 @@ configurenotify(XEvent *e)
 
 	/* TODO: updategeom handling sucks, needs to be simplified */
 	if (ev->window == root) {
+		if (randravailable)
+			XRRUpdateConfiguration(e);
+
 		dirty = (sw != ev->width || sh != ev->height);
 		sw = ev->width;
 		sh = ev->height;
@@ -1381,8 +1390,33 @@ run(void)
 	/* main event loop */
 	XSync(dpy, False);
 	while (running && !XNextEvent(dpy, &ev))
-		if (handler[ev.type])
+		if (randravailable && (ev.type == randreventbase + RRScreenChangeNotify
+		|| ev.type == randreventbase + RRNotify))
+			randrnotify(&ev);
+		else if (ev.type >= 0 && ev.type < LASTEvent && handler[ev.type])
 			handler[ev.type](&ev); /* call handler */
+}
+
+void randrnotify(XEvent *e) {
+
+	XWindowAttributes wa;
+	XEvent configure = {0};
+
+	XRRUpdateConfiguration(e);
+	if (e->type == randreventbase + RRNotify && ((XRRNotifyEvent *)e)->subtype == RRNotify_OutputChange)
+		fix_display(NULL);
+
+	/* Output changes can matter even when the framebuffer size stays the same. */
+	if (XGetWindowAttributes(dpy, root, &wa)) {
+
+		configure.xconfigure.type = ConfigureNotify;
+		configure.xconfigure.display = dpy;
+		configure.xconfigure.window = root;
+		configure.xconfigure.width = wa.width;
+		configure.xconfigure.height = wa.height;
+
+		configurenotify(&configure);
+	}
 }
 
 void startup_scripts() {
@@ -1548,7 +1582,8 @@ setmfact(const Arg *arg)
 void
 setup(void)
 {
-	int i;
+	int i, major, minor;
+	XWindowAttributes rootwa;
 	XSetWindowAttributes wa;
 	Atom utf8string;
 
@@ -1557,9 +1592,28 @@ setup(void)
 
 	/* init screen */
 	screen = DefaultScreen(dpy);
+
+	root = RootWindow(dpy, screen);
+
+	if (XRRQueryExtension(dpy, &randreventbase, &randrerrorbase)
+	&& XRRQueryVersion(dpy, &major, &minor)
+	&& (major > 1 || (major == 1 && minor >= 3))) {
+
+		randravailable = 1;
+
+		XRRSelectInput(dpy, root, RRScreenChangeNotifyMask|RROutputChangeNotifyMask);
+
+		fix_display(NULL);
+
+	} else
+		fputs("dwm: display switching requires RandR 1.3 or newer\n", stderr);
+
 	sw = DisplayWidth(dpy, screen);
 	sh = DisplayHeight(dpy, screen);
-	root = RootWindow(dpy, screen);
+	if (XGetWindowAttributes(dpy, root, &rootwa)) {
+		sw = rootwa.width;
+		sh = rootwa.height;
+	}
 	drw = drw_create(dpy, screen, root, sw, sh);
 	if (!drw_fontset_create(drw, fonts, LENGTH(fonts)))
 		die("no fonts could be loaded.");
@@ -1669,6 +1723,213 @@ spawn(const Arg *arg)
 		perror(" failed");
 		exit(EXIT_SUCCESS);
 	}
+}
+
+void fix_display(const Arg *arg) {
+
+	XRRScreenResources *resources;
+	XRROutputInfo **outputs;
+	XRRCrtcInfo *crtc;
+	XRRCrtcTransformAttributes *transform = NULL;
+	XRRPanning *panning;
+	XRRModeInfo *mode = NULL;
+	XWindowAttributes wa;
+	RROutput primary;
+
+	char **command, modename[32];
+	int i, j, k, internal, thinkpad = -1, external = -1, target, changed, status;
+	pid_t pid, waited;
+	sigset_t blocked, previous;
+
+	(void)arg;
+
+	if (!randravailable)
+		return;
+
+	if (!(resources = XRRGetScreenResources(dpy, root))) {
+
+		fputs("dwm: cannot query display outputs\n", stderr);
+
+		return;
+	}
+
+	if (!resources->noutput) {
+
+		XRRFreeScreenResources(resources);
+
+		return;
+	}
+
+	outputs = ecalloc(resources->noutput, sizeof(*outputs));
+	command = ecalloc(3 * resources->noutput + 20, sizeof(*command));
+	primary = XRRGetOutputPrimary(dpy, root);
+
+	for (i = 0; i < resources->noutput; i++) {
+
+		if (!(outputs[i] = XRRGetOutputInfo(dpy, resources, resources->outputs[i]))) {
+
+			fputs("dwm: display outputs changed while querying; try again\n", stderr);
+
+			goto done;
+		}
+
+		if (outputs[i]->connection != RR_Connected || !outputs[i]->nmode || !outputs[i]->ncrtc)
+			continue;
+
+		internal = !strncmp(outputs[i]->name, "eDP", 3) || !strncmp(outputs[i]->name, "LVDS", 4) || !strncmp(outputs[i]->name, "DSI", 3);
+
+		if (internal) {
+			if (thinkpad < 0)
+				thinkpad = i;
+		} else if (external < 0 || resources->outputs[i] == primary)
+			external = i;
+	}
+
+	target = external >= 0 ? external : thinkpad;
+
+	if (target < 0) {
+		fputs("dwm: no connected display has a usable mode; keeping current settings\n", stderr);
+		goto done;
+	}
+
+	for (i = 0; i < resources->nmode; i++)
+		if (resources->modes[i].id == outputs[target]->modes[0]) {
+			mode = &resources->modes[i];
+			break;
+		}
+
+	if (!mode)
+		goto done;
+
+	changed = primary != resources->outputs[target];
+	for (i = 0; i < resources->noutput; i++)
+		if (i != target && outputs[i]->crtc != None)
+			changed = 1;
+
+	if (!outputs[target]->crtc)
+		changed = 1;
+
+	else {
+
+		crtc = XRRGetCrtcInfo(dpy, resources, outputs[target]->crtc);
+
+		if (!crtc || crtc->mode != mode->id || crtc->x || crtc->y || crtc->rotation != RR_Rotate_0 || crtc->noutput != 1)
+			changed = 1;
+
+		if (crtc)
+			XRRFreeCrtcInfo(crtc);
+
+		if (XRRGetCrtcTransform(dpy, outputs[target]->crtc, &transform) && transform) {
+
+			for (i = 0; i < 3; i++)
+				for (j = 0; j < 3; j++)
+					if (transform->currentTransform.matrix[i][j] != (i == j ? 65536 : 0))
+						changed = 1;
+
+			XFree(transform);
+		}
+
+		if ((panning = XRRGetPanning(dpy, resources, outputs[target]->crtc))) {
+			if (panning->width || panning->height)
+				changed = 1;
+
+			XRRFreePanning(panning);
+		}
+	}
+
+	if (XGetWindowAttributes(dpy, root, &wa) && (wa.width != mode->width || wa.height != mode->height))
+		changed = 1;
+
+	if (!changed)
+		goto done;
+
+	snprintf(modename, sizeof modename, "0x%lx", mode->id);
+
+	k = 0;
+	command[k++] = "xrandr";
+	command[k++] = "--output";
+	command[k++] = outputs[target]->name;
+	command[k++] = "--mode";
+	command[k++] = modename;
+	command[k++] = "--primary";
+	command[k++] = "--pos";
+	command[k++] = "0x0";
+	command[k++] = "--rotate";
+	command[k++] = "normal";
+	command[k++] = "--reflect";
+	command[k++] = "normal";
+	command[k++] = "--scale";
+	command[k++] = "1x1";
+	command[k++] = "--panning";
+	command[k++] = "0x0";
+
+	for (i = 0; i < resources->noutput; i++)
+
+		if (i != target) {
+
+			command[k++] = "--output";
+
+			command[k++] = outputs[i]->name;
+
+			command[k++] = "--off";
+		}
+
+	sigemptyset(&blocked);
+
+	sigaddset(&blocked, SIGCHLD);
+
+	if (sigprocmask(SIG_BLOCK, &blocked, &previous) == -1) {
+
+		perror("dwm: cannot block SIGCHLD for display switching");
+
+		goto done;
+	}
+
+	XSync(dpy, False);
+
+	if ((pid = fork()) == 0) {
+
+		close(ConnectionNumber(dpy));
+
+		sigprocmask(SIG_SETMASK, &previous, NULL);
+
+		execvp(command[0], command);
+
+		perror("dwm: cannot execute xrandr");
+
+		_exit(EXIT_FAILURE);
+	}
+
+	if (pid < 0)
+		perror("dwm: cannot fork xrandr");
+
+	else {
+
+		do {
+
+			waited = waitpid(pid, &status, 0);
+
+		} while (waited < 0 && errno == EINTR);
+
+		if (waited < 0)
+			perror("dwm: cannot wait for xrandr");
+
+		else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+			fputs("dwm: xrandr could not apply display settings; try Super+Shift+L again\n", stderr);
+
+	}
+
+	sigprocmask(SIG_SETMASK, &previous, NULL);
+
+done:
+
+	for (i = 0; i < resources->noutput; i++)
+		if (outputs[i])
+			XRRFreeOutputInfo(outputs[i]);
+
+	free(command);
+	free(outputs);
+	XRRFreeScreenResources(resources);
 }
 
 void
@@ -1895,21 +2156,9 @@ updategeom(void)
 				else
 					mons = createmon();
 			}
-			for (i = 0, m = mons; i < nn && m; m = m->next, i++)
-				if (i >= n
-				|| unique[i].x_org != m->mx || unique[i].y_org != m->my
-				|| unique[i].width != m->mw || unique[i].height != m->mh)
-				{
-					dirty = 1;
-					m->num = i;
-					m->mx = m->wx = unique[i].x_org;
-					m->my = m->wy = unique[i].y_org;
-					m->mw = m->ww = unique[i].width;
-					m->mh = m->wh = unique[i].height;
-					updatebarpos(m);
-				}
 		} else { /* less monitors available nn < n */
 			for (i = nn; i < n; i++) {
+				dirty = 1;
 				for (m = mons; m && m->next; m = m->next);
 				while ((c = m->clients)) {
 					dirty = 1;
@@ -1924,6 +2173,20 @@ updategeom(void)
 				cleanupmon(m);
 			}
 		}
+		/* Refresh surviving monitors too when unplugging changes their size. */
+		for (i = 0, m = mons; i < nn && m; m = m->next, i++)
+			if (i >= n
+			|| unique[i].x_org != m->mx || unique[i].y_org != m->my
+			|| unique[i].width != m->mw || unique[i].height != m->mh)
+			{
+				dirty = 1;
+				m->num = i;
+				m->mx = m->wx = unique[i].x_org;
+				m->my = m->wy = unique[i].y_org;
+				m->mw = m->ww = unique[i].width;
+				m->mh = m->wh = unique[i].height;
+				updatebarpos(m);
+			}
 		free(unique);
 	} else
 #endif /* XINERAMA */
@@ -2099,6 +2362,10 @@ wintomon(Window w)
 int
 xerror(Display *dpy, XErrorEvent *ee)
 {
+
+	if (randravailable && (ee->error_code == randrerrorbase + BadRROutput || ee->error_code == randrerrorbase + BadRRCrtc))
+		return 0;
+
 	if (ee->error_code == BadWindow
 	|| (ee->request_code == X_SetInputFocus && ee->error_code == BadMatch)
 	|| (ee->request_code == X_PolyText8 && ee->error_code == BadDrawable)
