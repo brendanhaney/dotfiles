@@ -1,5 +1,5 @@
-static char *font = "HackNerdFont-Regular:size=10:antialias=true:autohint=true";
-static int borderpx = 1;
+static char *font = "UbuntuMono-R:size=12:antialias=true:autohint=true";
+static int borderpx = 4;
 static char *shell = "/bin/bash";
 char *utmp = NULL;
 char *scroll = NULL;

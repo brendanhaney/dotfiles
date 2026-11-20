@@ -11,10 +11,10 @@ static const char unknown_str[] = "n/a";
 
 static const struct arg args[] = {
 	/* function format          argument */
-	{ cpu_perc, " |  %s%% | ", NULL      },
-	{ wifi_perc, " |  %s%% | ", "wlp2s0" },
-	{ battery_perc, " |  %s%% | ", "BAT0"},
-	{ datetime, " %s", "%a %b %d %r "     },
+	{ ram_used, 	" |  %s | ",		NULL	 },
+	{ wifi_perc, 	" |  %s%% | ",		"wlp2s0" },
+	{ battery_perc, " |  %s%% | ",		"BAT0"	 },
+	{ datetime, 	" %s", "%a, %b %d, %Y - %H:%M:%S "		 },
 };
 
 /*
