@@ -26,10 +26,10 @@ static const char col_gray1[]       = "#000000";
 static const char col_gray2[]       = "#480048";
 
 /* font color */
-static const char col_gray3[]       = "#e3e3e3";
+static const char col_gray3[]       = "#f2f2f2";
 
 /* current tag and current window font color */
-static const char col_gray4[]       = "#eeeeee";
+static const char col_gray4[]       = "#f2f2f2";
 
 /* Top bar second color and active window border color */
 static const char col_cyan[]        = "#800080";
